@@ -5,13 +5,13 @@ Official TypeScript/JavaScript SDK for interacting with EasyOne API. Provides cl
 ## Installation
 
 ```bash
-npm install @easyone/sdk
+npm install @ez1/typescript-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { EasyOneClient } from '@easyone/sdk';
+import { EasyOneClient } from '@ez1/typescript-sdk';
 
 const client = new EasyOneClient({
   apiKey: 'up_live_YOUR_KEY_HERE', // Replace with your actual API key
