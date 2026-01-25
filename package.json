@@ -1,0 +1,45 @@
+{
+  "name": "@easyone/sdk",
+  "version": "1.0.0",
+  "description": "Official TypeScript SDK for EasyOne API with client-side encryption",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "tsx --test",
+    "test:unit": "tsx --test --test-name-pattern='^(unit)'",
+    "test:integration": "tsx --test --test-name-pattern='^(integration)'",
+    "test:coverage": "c8 --reporter=html --reporter=text tsx --test",
+    "test:watch": "tsx --test --watch"
+  },
+  "keywords": [
+    "easyone",
+    "file-upload",
+    "encryption",
+    "aes-gcm",
+    "storage",
+    "sdk"
+  ],
+  "author": "EasyOne",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/easyone.git",
+    "directory": "sdk/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "c8": "^9.0.0",
+    "dotenv": "^16.3.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
