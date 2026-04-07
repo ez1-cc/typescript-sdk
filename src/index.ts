@@ -297,7 +297,7 @@ export class EasyOneClient {
   }
 
   /**
-   * Upload a single encrypted chunk
+   * Upload a single encrypted chunk with retry logic for rate limiting.
    *
    * Returns the CID from server response
    *
@@ -316,7 +316,8 @@ export class EasyOneClient {
       mimeType: string;
       retentionDays: number;
       downloadLimit: number | null;
-    }
+    },
+    maxRetries: number = 5
   ): Promise<string> {
     const url = `${this.config.baseUrl}/api/public/v1/upload`;
 
@@ -344,24 +345,44 @@ export class EasyOneClient {
       headers['x-download-limit'] = metadata.downloadLimit.toString();
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: new Uint8Array(encryptedData),
-    });
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: new Uint8Array(encryptedData),
+      });
+
+      if (response.ok) {
+        // Extract CID from response
+        const result = await response.json();
+        if (!result.cid) {
+          throw new Error(`Server did not return CID: ${JSON.stringify(result)}`);
+        }
+        return result.cid;
+      }
+
+      if (response.status === 429) {
+        // Rate limited - get Retry-After header
+        const retryAfter = response.headers.get('Retry-After');
+        const waitSeconds = retryAfter ? parseInt(retryAfter, 10) : Math.pow(2, attempt);
+
+        lastError = new Error(`Rate limited. Retry after ${waitSeconds} seconds. (Attempt ${attempt + 1}/${maxRetries + 1})`);
+
+        if (attempt < maxRetries) {
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+          continue;
+        }
+      }
+
+      // Non-429 error or max retries exceeded
       const error = await response.text();
       throw new Error(`Upload failed: ${error}`);
     }
 
-    // Extract CID from response
-    const result = await response.json();
-    if (!result.cid) {
-      throw new Error(`Server did not return CID: ${JSON.stringify(result)}`);
-    }
-
-    return result.cid;
+    throw lastError || new Error('Upload failed after retries');
   }
 
   /**
