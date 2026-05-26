@@ -15,7 +15,7 @@ import { EasyOneClient } from '@ez1/typescript-sdk';
 
 const client = new EasyOneClient({
   apiKey: 'up_live_YOUR_KEY_HERE', // Replace with your actual API key
-  baseUrl: 'https://easyone.io', // optional
+  baseUrl: 'https://file.ez1.cc', // optional
 });
 
 // Upload a file
@@ -24,6 +24,7 @@ const result = await client.uploadFile(file, {
   mimeType: 'application/pdf',
   retentionDays: 30, // Days to keep the file (default: 30)
   // Set to 0 for indefinite retention (requires unlimited retention permission)
+  private: true, // Basic plan or higher: encrypts metadata while keeping CID + key links shareable
 });
 
 console.log(`CID: ${result.cid}`);
@@ -116,7 +117,7 @@ EASYONE_API_KEY=up_live_YOUR_KEY_HERE
 ### Client-Side Validation
 
 The SDK now includes:
-- API key format validation (must start with `up_live_` or `up_test_`)
+- API key format validation (must start with `up_live_`)
 - File size validation (max 100GB)
 - File type validation (blocks executable files)
 

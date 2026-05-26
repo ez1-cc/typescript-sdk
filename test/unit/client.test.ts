@@ -87,13 +87,13 @@ describe('unit: client initialization', () => {
       new EasyOneClient({ apiKey: 'up_live_valid_key' });
     });
 
-    assert.doesNotThrow(() => {
-      new EasyOneClient({ apiKey: 'up_test_valid_key' });
-    });
-
     // Invalid key should throw
     assert.throws(() => {
       new EasyOneClient({ apiKey: 'invalid_key' });
+    }, /Invalid API key format/);
+
+    assert.throws(() => {
+      new EasyOneClient({ apiKey: 'up_test_valid_key' });
     }, /Invalid API key format/);
   });
 

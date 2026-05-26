@@ -74,6 +74,35 @@ describe('unit: API calls', () => {
     assert.strictEqual(resultCid, 'server-generated-cid');
   });
 
+  it('should upload only the visible bytes of a Node Buffer', async (t) => {
+    let uploadRequest: RequestInit | undefined;
+    const mockFetch = t.mock.method(globalThis, 'fetch', async (_url, init) => {
+      uploadRequest = init as RequestInit;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: 'server-generated-cid', success: true, message: 'Upload complete' }),
+      } as Response;
+    });
+
+    const pooled = Buffer.allocUnsafe(64);
+    pooled.fill(0x61);
+    const visible = pooled.subarray(10, 13);
+
+    const result = await client.uploadFile(visible, {
+      fileName: 'buffer.txt',
+      mimeType: 'text/plain',
+    });
+
+    assert.strictEqual(result.cid, 'server-generated-cid');
+    assert.strictEqual(mockFetch.mock.calls.length, 1);
+    assert.ok(uploadRequest);
+
+    const headers = uploadRequest!.headers as Record<string, string>;
+    assert.strictEqual(headers['x-file-size'], '3');
+    assert.strictEqual((uploadRequest!.body as Uint8Array).byteLength, 3 + 28);
+  });
+
   it('should complete upload successfully', async (t) => {
     const mockFetch = t.mock.method(globalThis, 'fetch', async () => ({
       ok: true,

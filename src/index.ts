@@ -15,15 +15,28 @@ export interface UploadResult {
   decryptionKey: string;
 }
 
+export interface UploadOptions {
+  fileName?: string;
+  mimeType?: string;
+  retentionDays?: number;
+  downloadLimit?: number;
+  private?: boolean;
+  isPrivate?: boolean;
+}
+
 export interface FileMetadata {
   id: string;
-  filename: string;
-  size: number;
-  mimeType: string;
+  filename: string | null;
+  size: number | null;
+  storageSize?: number | null;
+  mimeType: string | null;
   uploadedAt: string;
   expiresAt: string | null;
   downloadLimit: number | null;
   downloadCount: number;
+  previewDisabled?: boolean;
+  isPrivate?: boolean;
+  encryptedMetadata?: string | null;
 }
 
 export interface FileListResult {
@@ -38,13 +51,16 @@ export interface FileListResult {
 
 export interface DownloadResult {
   cid: string;
-  filename: string;
-  size: number;
-  mimeType: string;
+  filename: string | null;
+  size: number | null;
+  storageSize?: number | null;
+  mimeType: string | null;
   downloadUrl: string;
   expiresAt: string | null;
   downloadLimit: number | null;
   downloadCount: number;
+  isPrivate?: boolean;
+  encryptedMetadata?: string | null;
 }
 
 /**
@@ -130,6 +146,34 @@ class Encryption {
     );
   }
 
+  async encryptMetadata(metadata: { filename: string; mimeType: string; size: number }, key: CryptoKey): Promise<string> {
+    const iv = crypto.getRandomValues(new Uint8Array(this.IV_LENGTH));
+    const encoded = new TextEncoder().encode(JSON.stringify(metadata));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: this.ALGORITHM, iv },
+      key,
+      encoded
+    );
+
+    const result = new Uint8Array(iv.byteLength + encrypted.byteLength);
+    result.set(iv, 0);
+    result.set(new Uint8Array(encrypted), iv.byteLength);
+    return btoa(String.fromCharCode(...result));
+  }
+
+  async decryptMetadata(encryptedMetadata: string, keyString: string): Promise<{ filename: string; mimeType: string; size: number }> {
+    const key = await this.importKey(keyString);
+    const raw = Uint8Array.from(atob(encryptedMetadata), c => c.charCodeAt(0));
+    const iv = raw.slice(0, this.IV_LENGTH);
+    const data = raw.slice(this.IV_LENGTH);
+    const decrypted = await crypto.subtle.decrypt(
+      { name: this.ALGORITHM, iv },
+      key,
+      data
+    );
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  }
+
   /**
    * Decrypt multi-chunk data
    * Each chunk is encrypted separately with: [IV][encrypted data][tag]
@@ -199,9 +243,9 @@ export class EasyOneClient {
     const apiKey = config.apiKey.trim();
 
     // Validate API key format
-    if (!apiKey.startsWith('up_live_') && !apiKey.startsWith('up_test_')) {
+    if (!apiKey.startsWith('up_live_')) {
       throw new Error(
-        'Invalid API key format. API keys must start with \'up_live_\' or \'up_test_\''
+        'Invalid API key format. API keys must start with \'up_live_\''
       );
     }
 
@@ -218,12 +262,7 @@ export class EasyOneClient {
    */
   async uploadFile(
     file: File | Buffer | Blob,
-    options: {
-      fileName?: string;
-      mimeType?: string;
-      retentionDays?: number;
-      downloadLimit?: number;
-    } = {}
+    options: UploadOptions = {}
   ): Promise<UploadResult> {
     const {
       fileName = file instanceof File ? file.name : 'unnamed',
@@ -231,6 +270,7 @@ export class EasyOneClient {
       retentionDays = 30,
       downloadLimit = null,
     } = options;
+    const isPrivate = options.private === true || options.isPrivate === true;
 
     // Client-side validation: Check file extension
     const forbiddenExtensions = ['.exe', '.bat', '.cmd', '.com', '.pif', '.scr', '.vbs', '.js'];
@@ -252,10 +292,16 @@ export class EasyOneClient {
     } else if (file instanceof Blob) {
       fileData = await file.arrayBuffer();
     } else {
-      fileData = file.buffer as ArrayBuffer;
+      fileData = file.buffer.slice(
+        file.byteOffset,
+        file.byteOffset + file.byteLength
+      ) as ArrayBuffer;
     }
 
     const fileSize = fileData.byteLength;
+    const encryptedMetadata = isPrivate
+      ? await this.encryption.encryptMetadata({ filename: fileName, mimeType, size: fileSize }, encryptionKey)
+      : null;
 
     // Client-side validation: Check file size
     if (fileSize > this.MAX_FILE_SIZE) {
@@ -287,6 +333,8 @@ export class EasyOneClient {
         mimeType,
         retentionDays,
         downloadLimit,
+        isPrivate,
+        encryptedMetadata,
       });
     }
 
@@ -316,6 +364,8 @@ export class EasyOneClient {
       mimeType: string;
       retentionDays: number;
       downloadLimit: number | null;
+      isPrivate: boolean;
+      encryptedMetadata: string | null;
     },
     maxRetries: number = 5
   ): Promise<string> {
@@ -325,9 +375,9 @@ export class EasyOneClient {
       'Authorization': `Bearer ${this.config.apiKey}`,
       'x-chunk-index': chunkIndex.toString(),
       'x-total-chunks': totalChunks.toString(),
-      'x-file-name': encodeURIComponent(metadata.fileName),
-      'x-file-size': metadata.fileSize.toString(),
-      'x-mime-type': metadata.mimeType,
+      'x-file-name': encodeURIComponent(metadata.isPrivate ? 'private-file' : metadata.fileName),
+      'x-file-size': metadata.isPrivate ? '0' : metadata.fileSize.toString(),
+      'x-mime-type': metadata.isPrivate ? 'application/octet-stream' : metadata.mimeType,
       'x-retention-days': metadata.retentionDays.toString(),
     };
 
@@ -343,6 +393,12 @@ export class EasyOneClient {
 
     if (metadata.downloadLimit !== null) {
       headers['x-download-limit'] = metadata.downloadLimit.toString();
+    }
+    if (metadata.isPrivate) {
+      headers['x-private'] = 'true';
+      if (metadata.encryptedMetadata) {
+        headers['x-encrypted-metadata'] = metadata.encryptedMetadata;
+      }
     }
 
     let lastError: Error | null = null;
@@ -396,6 +452,9 @@ export class EasyOneClient {
       mimeType: string;
       retentionDays?: number;
       downloadLimit?: number;
+      private?: boolean;
+      isPrivate?: boolean;
+      encryptedMetadata?: string;
     }
   ): Promise<{ cid: string; success: boolean }> {
     const url = `${this.config.baseUrl}/api/public/v1/complete-upload`;
@@ -430,6 +489,15 @@ export class EasyOneClient {
   ): Promise<Blob> {
     // Get download URL
     const downloadInfo = await this.getDownloadInfo(cid);
+    let fileInfo = {
+      filename: downloadInfo.filename || 'downloaded_file',
+      mimeType: downloadInfo.mimeType || 'application/octet-stream',
+      size: downloadInfo.size,
+    };
+
+    if (downloadInfo.isPrivate && downloadInfo.encryptedMetadata) {
+      fileInfo = await this.encryption.decryptMetadata(downloadInfo.encryptedMetadata, decryptionKey);
+    }
 
     // Download file
     const response = await fetch(downloadInfo.downloadUrl);
@@ -442,7 +510,7 @@ export class EasyOneClient {
     // Decrypt data (handles both single and multi-chunk files)
     const decryptedData = await this.encryption.decryptMultiChunk(encryptedData, decryptionKey);
 
-    const blob = new Blob([decryptedData], { type: downloadInfo.mimeType });
+    const blob = new Blob([decryptedData], { type: fileInfo.mimeType });
 
     // Save to file if outputPath provided (Node.js environment)
     if (outputPath && typeof require !== 'undefined') {
