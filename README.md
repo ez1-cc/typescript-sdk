@@ -24,7 +24,7 @@ const result = await client.uploadFile(file, {
   mimeType: 'application/pdf',
   retentionDays: 30, // Days to keep the file (default: 30)
   // Set to 0 for indefinite retention (requires unlimited retention permission)
-  private: true, // Basic plan or higher: encrypts metadata while keeping CID + key links shareable
+  private: true, // Basic plan or higher: uploader-only access with encrypted metadata
 });
 
 console.log(`CID: ${result.cid}`);
