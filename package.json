@@ -1,6 +1,6 @@
 {
   "name": "@ez1/typescript-sdk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Official TypeScript SDK for EasyOne API with client-side encryption",
   "type": "module",
   "main": "dist/index.js",
