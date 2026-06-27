@@ -41,11 +41,39 @@ describe('unit: API calls', () => {
         mimeType: 'text/plain',
         retentionDays: 30,
         downloadLimit: null,
+        isPrivate: false,
+        encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       }
     );
 
     assert.strictEqual(mockFetch.mock.calls.length, 1);
     assert.strictEqual(resultCid, 'server-generated-cid');
+  });
+
+  it('should allow legacy upload chunk calls without encrypted metadata', async (t) => {
+    const mockFetch = t.mock.method(globalThis, 'fetch', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ cid: 'server-generated-cid', success: true, message: 'Chunk uploaded' }),
+    } as Response));
+
+    await client['uploadChunk'](
+      undefined,
+      0,
+      1,
+      new ArrayBuffer(100),
+      {
+        fileName: 'legacy.txt',
+        fileSize: 100,
+        mimeType: 'text/plain',
+        retentionDays: 30,
+        downloadLimit: null,
+        isPrivate: false,
+      }
+    );
+
+    const headers = mockFetch.mock.calls[0].arguments[1].headers as Record<string, string>;
+    assert.strictEqual(headers['x-encrypted-metadata'], undefined);
   });
 
   it('should upload chunk with download limit', async (t) => {
@@ -67,6 +95,8 @@ describe('unit: API calls', () => {
         mimeType: 'text/plain',
         retentionDays: 30,
         downloadLimit: 10,
+        isPrivate: false,
+        encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       }
     );
 
@@ -99,8 +129,50 @@ describe('unit: API calls', () => {
     assert.ok(uploadRequest);
 
     const headers = uploadRequest!.headers as Record<string, string>;
+    assert.strictEqual(headers['x-file-name'], 'encrypted-metadata');
     assert.strictEqual(headers['x-file-size'], '3');
+    assert.strictEqual(headers['x-mime-type'], 'application/octet-stream');
+    assert.ok(headers['x-encrypted-metadata']);
     assert.strictEqual((uploadRequest!.body as Uint8Array).byteLength, 3 + 28);
+  });
+
+  it('should keep isPrivate as a supported upload option alias', async (t) => {
+    let uploadRequest: RequestInit | undefined;
+    t.mock.method(globalThis, 'fetch', async (_url, init) => {
+      uploadRequest = init as RequestInit;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: 'server-generated-cid', success: true, message: 'Upload complete' }),
+      } as Response;
+    });
+
+    await client.uploadFile(Buffer.from('abc'), {
+      fileName: 'private.txt',
+      mimeType: 'text/plain',
+      isPrivate: true,
+    });
+
+    const headers = uploadRequest!.headers as Record<string, string>;
+    assert.strictEqual(headers['x-private'], 'true');
+  });
+
+  it('should build and decrypt encrypted metadata', async () => {
+    const metadata = {
+      filename: 'report.pdf',
+      mimeType: 'application/pdf',
+      size: 2048,
+    };
+    const encrypted = await client.buildEncryptedMetadata(
+      metadata,
+      'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    );
+    const decrypted = await client.decryptMetadata(
+      encrypted,
+      'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    );
+
+    assert.deepStrictEqual(decrypted, metadata);
   });
 
   it('should complete upload successfully', async (t) => {
@@ -114,10 +186,28 @@ describe('unit: API calls', () => {
       fileName: 'test.txt',
       fileSize: 1024,
       mimeType: 'text/plain',
+      encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
     });
 
     assert.strictEqual(result.cid, 'test-cid');
     assert.strictEqual(result.success, true);
+  });
+
+  it('should allow legacy complete upload calls without encrypted metadata', async (t) => {
+    const mockFetch = t.mock.method(globalThis, 'fetch', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ cid: 'legacy-cid', success: true }),
+    } as Response));
+
+    const result = await client.completeUpload('legacy-cid', {
+      fileName: 'legacy.txt',
+      fileSize: 1024,
+      mimeType: 'text/plain',
+    });
+
+    assert.strictEqual(result.cid, 'legacy-cid');
+    assert.strictEqual(mockFetch.mock.calls.length, 1);
   });
 
   it('should get metadata successfully', async (t) => {
@@ -227,6 +317,7 @@ describe('unit: API calls', () => {
       fileName: 'test.txt',
       fileSize: 100,
       mimeType: 'text/plain',
+      encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
     });
 
     // Verify fetch was called

@@ -35,6 +35,7 @@ export interface FileMetadata {
   downloadLimit: number | null;
   downloadCount: number;
   previewDisabled?: boolean;
+  embeddingDisabled?: boolean;
   isPrivate?: boolean;
   encryptedMetadata?: string | null;
 }
@@ -59,8 +60,16 @@ export interface DownloadResult {
   expiresAt: string | null;
   downloadLimit: number | null;
   downloadCount: number;
+  previewDisabled?: boolean;
+  embeddingDisabled?: boolean;
   isPrivate?: boolean;
   encryptedMetadata?: string | null;
+}
+
+export interface PlainFileMetadata {
+  filename: string;
+  mimeType: string;
+  size: number;
 }
 
 /**
@@ -146,7 +155,7 @@ class Encryption {
     );
   }
 
-  async encryptMetadata(metadata: { filename: string; mimeType: string; size: number }, key: CryptoKey): Promise<string> {
+  async encryptMetadata(metadata: PlainFileMetadata, key: CryptoKey): Promise<string> {
     const iv = crypto.getRandomValues(new Uint8Array(this.IV_LENGTH));
     const encoded = new TextEncoder().encode(JSON.stringify(metadata));
     const encrypted = await crypto.subtle.encrypt(
@@ -161,7 +170,7 @@ class Encryption {
     return btoa(String.fromCharCode(...result));
   }
 
-  async decryptMetadata(encryptedMetadata: string, keyString: string): Promise<{ filename: string; mimeType: string; size: number }> {
+  async decryptMetadata(encryptedMetadata: string, keyString: string): Promise<PlainFileMetadata> {
     const key = await this.importKey(keyString);
     const raw = Uint8Array.from(atob(encryptedMetadata), c => c.charCodeAt(0));
     const iv = raw.slice(0, this.IV_LENGTH);
@@ -299,9 +308,10 @@ export class EasyOneClient {
     }
 
     const fileSize = fileData.byteLength;
-    const encryptedMetadata = isPrivate
-      ? await this.encryption.encryptMetadata({ filename: fileName, mimeType, size: fileSize }, encryptionKey)
-      : null;
+    const encryptedMetadata = await this.encryption.encryptMetadata(
+      { filename: fileName, mimeType, size: fileSize },
+      encryptionKey
+    );
 
     // Client-side validation: Check file size
     if (fileSize > this.MAX_FILE_SIZE) {
@@ -345,6 +355,31 @@ export class EasyOneClient {
   }
 
   /**
+   * Build encrypted metadata for low-level multipart flows.
+   */
+  async buildEncryptedMetadata(
+    metadata: PlainFileMetadata,
+    decryptionKey: string
+  ): Promise<string> {
+    if (!metadata.filename || !metadata.mimeType || !Number.isFinite(metadata.size)) {
+      throw new Error('metadata requires filename, mimeType, and size');
+    }
+
+    const key = await this.encryption.importKey(decryptionKey);
+    return this.encryption.encryptMetadata(metadata, key);
+  }
+
+  /**
+   * Decrypt encrypted metadata returned by metadata/list/download APIs.
+   */
+  async decryptMetadata(
+    encryptedMetadata: string,
+    decryptionKey: string
+  ): Promise<PlainFileMetadata> {
+    return this.encryption.decryptMetadata(encryptedMetadata, decryptionKey);
+  }
+
+  /**
    * Upload a single encrypted chunk with retry logic for rate limiting.
    *
    * Returns the CID from server response
@@ -365,7 +400,7 @@ export class EasyOneClient {
       retentionDays: number;
       downloadLimit: number | null;
       isPrivate: boolean;
-      encryptedMetadata: string | null;
+      encryptedMetadata?: string;
     },
     maxRetries: number = 5
   ): Promise<string> {
@@ -375,9 +410,9 @@ export class EasyOneClient {
       'Authorization': `Bearer ${this.config.apiKey}`,
       'x-chunk-index': chunkIndex.toString(),
       'x-total-chunks': totalChunks.toString(),
-      'x-file-name': encodeURIComponent(metadata.isPrivate ? 'private-file' : metadata.fileName),
-      'x-file-size': metadata.isPrivate ? '0' : metadata.fileSize.toString(),
-      'x-mime-type': metadata.isPrivate ? 'application/octet-stream' : metadata.mimeType,
+      'x-file-name': encodeURIComponent('encrypted-metadata'),
+      'x-file-size': metadata.fileSize.toString(),
+      'x-mime-type': 'application/octet-stream',
       'x-retention-days': metadata.retentionDays.toString(),
     };
 
@@ -394,11 +429,11 @@ export class EasyOneClient {
     if (metadata.downloadLimit !== null) {
       headers['x-download-limit'] = metadata.downloadLimit.toString();
     }
+    if (metadata.encryptedMetadata) {
+      headers['x-encrypted-metadata'] = metadata.encryptedMetadata;
+    }
     if (metadata.isPrivate) {
       headers['x-private'] = 'true';
-      if (metadata.encryptedMetadata) {
-        headers['x-encrypted-metadata'] = metadata.encryptedMetadata;
-      }
     }
 
     let lastError: Error | null = null;
@@ -495,7 +530,7 @@ export class EasyOneClient {
       size: downloadInfo.size,
     };
 
-    if (downloadInfo.isPrivate && downloadInfo.encryptedMetadata) {
+    if (downloadInfo.encryptedMetadata) {
       fileInfo = await this.encryption.decryptMetadata(downloadInfo.encryptedMetadata, decryptionKey);
     }
 

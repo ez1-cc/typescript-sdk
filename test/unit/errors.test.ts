@@ -38,6 +38,8 @@ describe('unit: error handling', () => {
             mimeType: 'text/plain',
             retentionDays: 30,
             downloadLimit: null,
+            isPrivate: false,
+            encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
           }
         );
       },
@@ -63,6 +65,7 @@ describe('unit: error handling', () => {
           fileName: 'test.txt',
           fileSize: 100,
           mimeType: 'text/plain',
+          encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
         });
       },
       /Complete upload failed/
@@ -306,6 +309,8 @@ describe('unit: error handling', () => {
         mimeType: 'text/plain',
         retentionDays: 30,
         downloadLimit: null,
+        isPrivate: false,
+        encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       }
     );
 

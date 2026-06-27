@@ -24,12 +24,14 @@ const result = await client.uploadFile(file, {
   mimeType: 'application/pdf',
   retentionDays: 30, // Days to keep the file (default: 30)
   // Set to 0 for indefinite retention (requires unlimited retention permission)
-  private: true, // Basic plan or higher: uploader-only access with encrypted metadata
+  private: true, // Optional, Basic plan or higher: restrict access to the uploader
 });
 
 console.log(`CID: ${result.cid}`);
 console.log(`Decryption Key: ${result.decryptionKey}`);
 ```
+
+All uploads encrypt filename, MIME type, and original size as client-side metadata. The `private` option only adds uploader-only access control.
 
 ## Downloading a File
 
@@ -54,7 +56,13 @@ a.click();
 const files = await client.listFiles({ limit: 20 });
 
 for (const file of files.files) {
-  console.log(`${file.filename} - ${file.size} bytes`);
+  console.log(`${file.id} - encrypted metadata: ${Boolean(file.encryptedMetadata)}`);
+}
+
+const metadata = await client.getMetadata('content-id');
+if (metadata.encryptedMetadata) {
+  const plain = await client.decryptMetadata(metadata.encryptedMetadata, 'decryption-key');
+  console.log(`${plain.filename} (${plain.size} bytes)`);
 }
 ```
 
@@ -91,6 +99,8 @@ new EasyOneClient(config: {
 - `getDownloadInfo(cid)` - Get download URL and metadata
 - `getMetadata(cid)` - Get file metadata
 - `listFiles(options?)` - List user's files
+- `buildEncryptedMetadata(metadata, decryptionKey)` - Build encrypted metadata for low-level multipart flows
+- `decryptMetadata(encryptedMetadata, decryptionKey)` - Decrypt metadata returned by API responses
 - `encryptData(data)` - Encrypt data without uploading
 - `decryptData(encryptedData, key)` - Decrypt data
 

@@ -51,9 +51,15 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
     const downloadInfo = await client.getDownloadInfo(fileInfo.cid);
 
     assert.ok(downloadInfo.downloadUrl);
-    assert.strictEqual(downloadInfo.filename, 'download_test.txt');
-    assert.strictEqual(typeof downloadInfo.size, 'number');
-    assert.strictEqual(downloadInfo.mimeType, 'text/plain');
+    assert.strictEqual(downloadInfo.filename, null);
+    assert.strictEqual(downloadInfo.size, null);
+    assert.strictEqual(downloadInfo.mimeType, null);
+    assert.ok(downloadInfo.encryptedMetadata);
+
+    const metadata = await client.decryptMetadata(downloadInfo.encryptedMetadata, fileInfo.decryptionKey);
+    assert.strictEqual(metadata.filename, 'download_test.txt');
+    assert.strictEqual(typeof metadata.size, 'number');
+    assert.strictEqual(metadata.mimeType, 'text/plain');
   });
 
   it('should download file to memory', async () => {
@@ -207,8 +213,9 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
       retentionDays: 1,
     });
 
-    // Verify the mimeType is preserved in metadata
+    // User-facing MIME type is encrypted in metadata for new uploads.
     const metadata = await client.getMetadata(uploadResult.cid);
-    assert.strictEqual(metadata.mimeType, 'application/json');
+    assert.strictEqual(metadata.mimeType, null);
+    assert.ok(metadata.encryptedMetadata);
   });
 });

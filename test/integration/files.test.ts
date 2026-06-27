@@ -85,9 +85,10 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const metadata = await client.getMetadata(fileId);
 
     assert.ok(metadata.id);
-    assert.ok(metadata.filename);
-    assert.strictEqual(typeof metadata.size, 'number');
-    assert.ok(metadata.mimeType);
+    assert.strictEqual(metadata.filename, null);
+    assert.strictEqual(metadata.size, null);
+    assert.strictEqual(metadata.mimeType, null);
+    assert.ok(metadata.encryptedMetadata);
     assert.ok(metadata.uploadedAt);
     assert.strictEqual(metadata.id, fileId);
   });
@@ -118,9 +119,10 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const result = await client.uploadFile(blob, uploadOptions);
     const metadata = await client.getMetadata(result.cid);
 
-    assert.strictEqual(metadata.filename, uploadOptions.fileName);
-    assert.strictEqual(metadata.mimeType, uploadOptions.mimeType);
-    assert.strictEqual(metadata.size, testContent.length);
+    assert.strictEqual(metadata.filename, null);
+    assert.strictEqual(metadata.mimeType, null);
+    assert.strictEqual(metadata.size, null);
+    assert.ok(metadata.encryptedMetadata);
   });
 
   it('should return empty list with large offset', async () => {
@@ -157,7 +159,8 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const result = await client.uploadFile(blob);
     const metadata = await client.getMetadata(result.cid);
 
-    assert.strictEqual(metadata.size, 1000);
+    assert.strictEqual(metadata.size, null);
+    assert.ok(metadata.encryptedMetadata);
   });
 
   it('should find uploaded files in list', async () => {
@@ -238,7 +241,8 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
       });
 
       const metadata = await client.getMetadata(result.cid);
-      assert.strictEqual(metadata.mimeType, testCase.type);
+      assert.strictEqual(metadata.mimeType, null);
+      assert.ok(metadata.encryptedMetadata);
     }
   });
 
@@ -255,6 +259,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     });
 
     const metadata = await client.getMetadata(result.cid);
-    assert.ok(metadata.filename);
+    assert.strictEqual(metadata.filename, null);
+    assert.ok(metadata.encryptedMetadata);
   });
 });
