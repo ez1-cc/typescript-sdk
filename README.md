@@ -27,14 +27,14 @@ const result = await client.uploadFile({
 }, {
   retentionDays: 30, // Days to keep the file (default: 30)
   // Set to 0 for indefinite retention (requires unlimited retention permission)
-  private: true, // Optional, Basic plan or higher: restrict access to the uploader
+  private: true, // Enables owner-only Document Privilege (Basic plan or higher)
 });
 
 console.log(`CID: ${result.cid}`);
 console.log(`Decryption Key: ${result.decryptionKey}`);
 ```
 
-All uploads encrypt filename, MIME type, and original size as client-side metadata. Embedding is disabled by default and must be explicitly enabled with `embed: true`. Private uploads and uploads with a download limit cannot enable embedding.
+All uploads already encrypt file content and user-facing metadata. The `private` option enables owner-only Document Privilege. Embedding is disabled by default and must be explicitly enabled with `embed: true`; it cannot be enabled with owner-only Document Privilege or a download limit.
 
 ## Downloading a File
 

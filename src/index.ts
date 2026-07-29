@@ -31,6 +31,7 @@ export interface UploadFile {
 export interface UploadOptions {
   retentionDays?: number;
   downloadLimit?: number;
+  /** Enables owner-only Document Privilege. Encryption is enabled for every upload. */
   private?: boolean;
   embed?: boolean;
 }
@@ -346,7 +347,7 @@ export class EasyOneClient {
       throw new TypeError('downloadLimit must be a positive safe integer');
     }
     if (embed && (isPrivate || downloadLimit !== null)) {
-      throw new Error('embed cannot be enabled for private uploads or uploads with a download limit');
+      throw new Error('embed cannot be enabled with owner-only Document Privilege or a download limit');
     }
     const embeddingDisabled = !embed || isPrivate || downloadLimit !== null;
     const { name: fileName, type: mimeType, size: fileSize } = file;
