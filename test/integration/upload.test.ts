@@ -14,6 +14,13 @@ if (typeof globalThis.crypto === 'undefined') {
   globalThis.crypto = webcrypto;
 }
 
+const asUpload = (blob: Blob, name: string, type = blob.type || 'application/octet-stream') => ({
+  data: blob,
+  name,
+  type,
+  size: blob.size,
+});
+
 describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
   let client: EasyOneClient;
   let testConfig: ReturnType<typeof getTestConfig>;
@@ -31,9 +38,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data], { type: 'text/plain' });
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'test_small_file.txt',
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, 'test_small_file.txt'), {
       retentionDays: 7,
     });
 
@@ -50,9 +55,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     const data = new Uint8Array(size).fill(65); // Fill with 'A'
     const blob = new Blob([data], { type: 'application/octet-stream' });
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'test_large_file.bin',
-      mimeType: 'application/octet-stream',
+    const result = await client.uploadFile(asUpload(blob, 'test_large_file.bin'), {
       retentionDays: 1, // Short retention for test files
     });
 
@@ -65,9 +68,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data]);
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'custom_metadata.dat',
-      mimeType: 'application/octet-stream',
+    const result = await client.uploadFile(asUpload(blob, 'custom_metadata.dat'), {
       retentionDays: 30,
       downloadLimit: 5,
     });
@@ -81,7 +82,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data]);
 
-    const result = await client.uploadFile(blob);
+    const result = await client.uploadFile(asUpload(blob, 'no_options.bin'));
 
     assert.ok(result.cid);
     assert.ok(result.decryptionKey);
@@ -109,9 +110,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     }
     const blob = new Blob([data], { type: 'application/octet-stream' });
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'binary_test.bin',
-      mimeType: 'application/octet-stream',
+    const result = await client.uploadFile(asUpload(blob, 'binary_test.bin'), {
       retentionDays: 1,
     });
 
@@ -139,9 +138,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     const data = new TextEncoder().encode('');
     const blob = new Blob([data]);
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'empty.txt',
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, 'empty.txt', 'text/plain'), {
       retentionDays: 1,
     });
 
@@ -153,9 +150,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data]);
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'test file (1) [copy].txt',
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, 'test file (1) [copy].txt', 'text/plain'), {
       retentionDays: 1,
     });
 
@@ -169,9 +164,7 @@ describe('integration: upload flow', { skip: shouldSkipIntegration() }, () => {
 
     const longFilename = 'a'.repeat(200) + '.txt';
 
-    const result = await client.uploadFile(blob, {
-      fileName: longFilename,
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, longFilename, 'text/plain'), {
       retentionDays: 1,
     });
 

@@ -50,30 +50,19 @@ describe('unit: API calls', () => {
     assert.strictEqual(resultCid, 'server-generated-cid');
   });
 
-  it('should allow legacy upload chunk calls without encrypted metadata', async (t) => {
-    const mockFetch = t.mock.method(globalThis, 'fetch', async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ cid: 'server-generated-cid', success: true, message: 'Chunk uploaded' }),
-    } as Response));
-
-    await client['uploadChunk'](
-      undefined,
-      0,
-      1,
-      new ArrayBuffer(100),
-      {
-        fileName: 'legacy.txt',
+  it('should reject upload chunk calls without encrypted metadata', async () => {
+    await assert.rejects(
+      client['uploadChunk'](undefined, 0, 1, new ArrayBuffer(100), {
+        fileName: 'missing.txt',
         fileSize: 100,
         mimeType: 'text/plain',
         retentionDays: 30,
         downloadLimit: null,
         isPrivate: false,
-      }
+        encryptedMetadata: '',
+      }),
+      /encryptedMetadata is required/
     );
-
-    const headers = mockFetch.mock.calls[0].arguments[1].headers as Record<string, string>;
-    assert.strictEqual(headers['x-encrypted-metadata'], undefined);
   });
 
   it('should upload chunk with download limit', async (t) => {
@@ -119,9 +108,11 @@ describe('unit: API calls', () => {
     pooled.fill(0x61);
     const visible = pooled.subarray(10, 13);
 
-    const result = await client.uploadFile(visible, {
-      fileName: 'buffer.txt',
-      mimeType: 'text/plain',
+    const result = await client.uploadFile({
+      data: visible,
+      name: 'buffer.txt',
+      type: 'text/plain',
+      size: visible.byteLength,
     });
 
     assert.strictEqual(result.cid, 'server-generated-cid');
@@ -136,7 +127,7 @@ describe('unit: API calls', () => {
     assert.strictEqual((uploadRequest!.body as Uint8Array).byteLength, 3 + 28);
   });
 
-  it('should keep isPrivate as a supported upload option alias', async (t) => {
+  it('should send the private upload option', async (t) => {
     let uploadRequest: RequestInit | undefined;
     t.mock.method(globalThis, 'fetch', async (_url, init) => {
       uploadRequest = init as RequestInit;
@@ -147,14 +138,133 @@ describe('unit: API calls', () => {
       } as Response;
     });
 
-    await client.uploadFile(Buffer.from('abc'), {
-      fileName: 'private.txt',
-      mimeType: 'text/plain',
-      isPrivate: true,
-    });
+    await client.uploadFile({
+      data: new TextEncoder().encode('abc'),
+      name: 'private.txt',
+      type: 'text/plain',
+      size: 3,
+    }, { private: true });
 
     const headers = uploadRequest!.headers as Record<string, string>;
     assert.strictEqual(headers['x-private'], 'true');
+  });
+
+  it('should stream arbitrary source chunks into protocol-sized chunks', async (t) => {
+    const bodies: Uint8Array[] = [];
+    t.mock.method(globalThis, 'fetch', async (_url, init) => {
+      bodies.push(init!.body as Uint8Array);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: 'server-generated-cid' }),
+      } as Response;
+    });
+
+    async function* source() {
+      yield new Uint8Array([1]);
+      yield new Uint8Array([2, 3]);
+    }
+
+    await client.uploadFile({
+      data: source(),
+      name: 'stream.bin',
+      type: 'application/octet-stream',
+      size: 3,
+    });
+
+    assert.strictEqual(bodies.length, 1);
+    assert.strictEqual(bodies[0].byteLength, 31);
+  });
+
+  it('should reject upload size mismatches', async () => {
+    await assert.rejects(
+      client.uploadFile({
+        data: new Uint8Array([1, 2]),
+        name: 'short.bin',
+        type: 'application/octet-stream',
+        size: 3,
+      }),
+      /ended early/
+    );
+  });
+
+  it('should reject trailing upload data before the final request', async (t) => {
+    const mockFetch = t.mock.method(globalThis, 'fetch');
+    await assert.rejects(
+      client.uploadFile({
+        data: new Uint8Array([1, 2, 3]),
+        name: 'long.bin',
+        type: 'application/octet-stream',
+        size: 2,
+      }),
+      /trailing data/
+    );
+    assert.strictEqual(mockFetch.mock.calls.length, 0);
+  });
+
+  it('should stream and authenticate independently encrypted download chunks', async (t) => {
+    const streamingClient = new EasyOneClient({
+      apiKey: 'up_live_test12345',
+      baseUrl: 'https://test.example.com',
+    });
+    (streamingClient as unknown as { CHUNK_SIZE: number }).CHUNK_SIZE = 4;
+    const rawKey = new Uint8Array(32).fill(7);
+    const key = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt']);
+    const keyString = btoa(String.fromCharCode(...rawKey));
+    const encrypt = async (plaintext: Uint8Array) => {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        plaintext
+      ));
+      const frame = new Uint8Array(iv.byteLength + ciphertext.byteLength);
+      frame.set(iv);
+      frame.set(ciphertext, iv.byteLength);
+      return frame;
+    };
+    const first = await encrypt(new TextEncoder().encode('abcd'));
+    const second = await encrypt(new TextEncoder().encode('efg'));
+    const encrypted = new Uint8Array(first.byteLength + second.byteLength);
+    encrypted.set(first);
+    encrypted.set(second, first.byteLength);
+
+    let request = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      request += 1;
+      if (request === 1) {
+        return Response.json({
+          cid: 'test-cid',
+          filename: null,
+          mimeType: null,
+          size: null,
+          downloadUrl: 'https://example.com/download/test-cid',
+          expiresAt: null,
+          downloadLimit: null,
+          downloadCount: 0,
+          encryptedMetadata: await streamingClient.buildEncryptedMetadata({
+            filename: 'stream.bin',
+            mimeType: 'application/octet-stream',
+            size: 7,
+          }, keyString),
+        });
+      }
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encrypted.subarray(0, 3));
+          controller.enqueue(encrypted.subarray(3, 35));
+          controller.enqueue(encrypted.subarray(35));
+          controller.close();
+        },
+      }));
+    });
+
+    const download = await streamingClient.downloadFile('test-cid', keyString);
+    const plaintext = new Uint8Array(await new Response(download.stream).arrayBuffer());
+
+    assert.deepStrictEqual(plaintext, new TextEncoder().encode('abcdefg'));
+    assert.strictEqual(download.filename, 'stream.bin');
+    assert.strictEqual(download.size, 7);
   });
 
   it('should build and decrypt encrypted metadata', async () => {
@@ -193,21 +303,16 @@ describe('unit: API calls', () => {
     assert.strictEqual(result.success, true);
   });
 
-  it('should allow legacy complete upload calls without encrypted metadata', async (t) => {
-    const mockFetch = t.mock.method(globalThis, 'fetch', async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ cid: 'legacy-cid', success: true }),
-    } as Response));
-
-    const result = await client.completeUpload('legacy-cid', {
-      fileName: 'legacy.txt',
-      fileSize: 1024,
-      mimeType: 'text/plain',
-    });
-
-    assert.strictEqual(result.cid, 'legacy-cid');
-    assert.strictEqual(mockFetch.mock.calls.length, 1);
+  it('should reject complete upload calls without encrypted metadata', async () => {
+    await assert.rejects(
+      client.completeUpload('missing-metadata', {
+        fileName: 'missing.txt',
+        fileSize: 1024,
+        mimeType: 'text/plain',
+        encryptedMetadata: '',
+      }),
+      /encryptedMetadata is required/
+    );
   });
 
   it('should get metadata successfully', async (t) => {

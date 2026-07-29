@@ -18,10 +18,13 @@ const client = new EasyOneClient({
   baseUrl: 'https://file.ez1.cc', // optional
 });
 
-// Upload a file
-const result = await client.uploadFile(file, {
-  fileName: 'my-file.pdf',
-  mimeType: 'application/pdf',
+// Blob, Uint8Array, ReadableStream, and AsyncIterable inputs are supported.
+const result = await client.uploadFile({
+  data: file,
+  name: 'my-file.pdf',
+  type: 'application/pdf',
+  size: file.size,
+}, {
   retentionDays: 30, // Days to keep the file (default: 30)
   // Set to 0 for indefinite retention (requires unlimited retention permission)
   private: true, // Optional, Basic plan or higher: restrict access to the uploader
@@ -37,17 +40,34 @@ All uploads encrypt filename, MIME type, and original size as client-side metada
 
 ```typescript
 // Download and decrypt a file
-const blob = await client.downloadFile(
+const download = await client.downloadFile(
   result.cid,
   result.decryptionKey
 );
 
 // Save to disk (browser)
+const blob = await new Response(download.stream, {
+  headers: { 'Content-Type': download.mimeType },
+}).blob();
 const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
 a.href = url;
 a.download = 'my-file.pdf';
 a.click();
+```
+
+In Node.js ESM, pipe the returned web stream to any Node writable stream:
+
+```typescript
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+
+const download = await client.downloadFile(result.cid, result.decryptionKey);
+await pipeline(
+  Readable.fromWeb(download.stream),
+  createWriteStream(download.filename),
+);
 ```
 
 ## Listing Files
@@ -88,14 +108,13 @@ console.log(new TextDecoder().decode(decrypted));
 new EasyOneClient(config: {
   apiKey: string;
   baseUrl?: string;
-  chunkSize?: number;
 })
 ```
 
 #### Methods
 
-- `uploadFile(file, options?)` - Upload a file with encryption
-- `downloadFile(cid, decryptionKey, outputPath?)` - Download and decrypt a file
+- `uploadFile({ data, name, type, size }, options?)` - Encrypt and upload a bounded-memory input stream
+- `downloadFile(cid, decryptionKey)` - Return metadata and a decrypted `ReadableStream<Uint8Array>`
 - `getDownloadInfo(cid)` - Get download URL and metadata
 - `getMetadata(cid)` - Get file metadata
 - `listFiles(options?)` - List user's files
@@ -130,6 +149,8 @@ The SDK now includes:
 - API key format validation (must start with `up_live_`)
 - File size validation (max 100GB)
 - File type validation (blocks executable files)
+
+The declared upload size must exactly match the input stream. Custom streams must emit non-empty chunks no larger than 15 MiB. Downloads authenticate each encrypted chunk before exposing its plaintext and reject truncated or trailing ciphertext.
 
 ## License
 

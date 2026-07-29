@@ -14,6 +14,13 @@ if (typeof globalThis.crypto === 'undefined') {
   globalThis.crypto = webcrypto;
 }
 
+const asUpload = (blob: Blob, name: string, type = blob.type || 'application/octet-stream') => ({
+  data: blob,
+  name,
+  type,
+  size: blob.size,
+});
+
 // Store uploaded file IDs for testing
 const testFileIds: string[] = [];
 
@@ -34,9 +41,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
       const data = new TextEncoder().encode(testContent);
       const blob = new Blob([data], { type: 'text/plain' });
 
-      const result = await client.uploadFile(blob, {
-        fileName: `test_file_${i}.txt`,
-        mimeType: 'text/plain',
+      const result = await client.uploadFile(asUpload(blob, `test_file_${i}.txt`), {
         retentionDays: 7,
       });
 
@@ -110,13 +115,11 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const blob = new Blob([data]);
 
     const uploadOptions = {
-      fileName: 'metadata_test.txt',
-      mimeType: 'text/plain',
       retentionDays: 14,
       downloadLimit: 100,
     };
 
-    const result = await client.uploadFile(blob, uploadOptions);
+    const result = await client.uploadFile(asUpload(blob, 'metadata_test.txt', 'text/plain'), uploadOptions);
     const metadata = await client.getMetadata(result.cid);
 
     assert.strictEqual(metadata.filename, null);
@@ -156,7 +159,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data]);
 
-    const result = await client.uploadFile(blob);
+    const result = await client.uploadFile(asUpload(blob, 'size-test.txt', 'text/plain'));
     const metadata = await client.getMetadata(result.cid);
 
     assert.strictEqual(metadata.size, null);
@@ -169,9 +172,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data]);
 
-    const uploadResult = await client.uploadFile(blob, {
-      fileName: 'search_test.txt',
-      mimeType: 'text/plain',
+    const uploadResult = await client.uploadFile(asUpload(blob, 'search_test.txt', 'text/plain'), {
       retentionDays: 7,
     });
 
@@ -208,9 +209,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const blob = new Blob([data]);
 
     const downloadLimit = 50;
-    const result = await client.uploadFile(blob, {
-      fileName: 'download_limit_test.txt',
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, 'download_limit_test.txt', 'text/plain'), {
       retentionDays: 7,
       downloadLimit,
     });
@@ -234,9 +233,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
       const data = new TextEncoder().encode(testCase.content);
       const blob = new Blob([data], { type: testCase.type });
 
-      const result = await client.uploadFile(blob, {
-        fileName: `mimetype_test.${testCase.type.split('/')[1]}`,
-        mimeType: testCase.type,
+      const result = await client.uploadFile(asUpload(blob, `mimetype_test.${testCase.type.split('/')[1]}`), {
         retentionDays: 1,
       });
 
@@ -252,9 +249,7 @@ describe('integration: file operations', { skip: shouldSkipIntegration() }, () =
     const blob = new Blob([data]);
 
     const unicodeFilename = 'テストファイル.txt';
-    const result = await client.uploadFile(blob, {
-      fileName: unicodeFilename,
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, unicodeFilename, 'text/plain'), {
       retentionDays: 1,
     });
 

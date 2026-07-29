@@ -139,6 +139,12 @@ describe('unit: error handling', () => {
     });
 
     let callCount = 0;
+    const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+    const encryptedMetadata = await client.buildEncryptedMetadata({
+      filename: 'test.txt',
+      mimeType: 'text/plain',
+      size: 4,
+    }, key);
     t.mock.method(globalThis, 'fetch', async () => {
       callCount++;
       if (callCount === 1) {
@@ -149,6 +155,8 @@ describe('unit: error handling', () => {
             downloadUrl: 'https://example.com/download/test-cid',
             filename: 'test.txt',
             mimeType: 'text/plain',
+            size: 4,
+            encryptedMetadata,
           }),
         } as Response;
       } else {
@@ -162,9 +170,27 @@ describe('unit: error handling', () => {
 
     await assert.rejects(
       async () => {
-        await client.downloadFile('test-cid', 'decryption_key');
+        await client.downloadFile('test-cid', key);
       },
       /Download failed/
+    );
+  });
+
+  it('should reject downloads without encrypted metadata', async (t) => {
+    const client = new EasyOneClient({
+      apiKey: 'up_live_test',
+      baseUrl: 'https://test.example.com',
+    });
+    t.mock.method(globalThis, 'fetch', async () => Response.json({
+      downloadUrl: 'https://example.com/download/test-cid',
+      filename: 'plaintext.txt',
+      mimeType: 'text/plain',
+      size: 4,
+    }));
+
+    await assert.rejects(
+      client.downloadFile('test-cid', 'unused'),
+      /missing encrypted metadata/
     );
   });
 

@@ -15,13 +15,23 @@ export interface UploadResult {
   decryptionKey: string;
 }
 
+export type UploadData =
+  | Blob
+  | Uint8Array
+  | ReadableStream<Uint8Array>
+  | AsyncIterable<Uint8Array>;
+
+export interface UploadFile {
+  data: UploadData;
+  name: string;
+  type: string;
+  size: number;
+}
+
 export interface UploadOptions {
-  fileName?: string;
-  mimeType?: string;
   retentionDays?: number;
   downloadLimit?: number;
   private?: boolean;
-  isPrivate?: boolean;
 }
 
 export interface FileMetadata {
@@ -50,7 +60,7 @@ export interface FileListResult {
   };
 }
 
-export interface DownloadResult {
+export interface DownloadInfo {
   cid: string;
   filename: string | null;
   size: number | null;
@@ -66,10 +76,20 @@ export interface DownloadResult {
   encryptedMetadata?: string | null;
 }
 
+export interface DownloadFileResult extends PlainFileMetadata {
+  stream: ReadableStream<Uint8Array>;
+}
+
 export interface PlainFileMetadata {
   filename: string;
   mimeType: string;
   size: number;
+}
+
+function copyToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 }
 
 /**
@@ -183,49 +203,81 @@ class Encryption {
     return JSON.parse(new TextDecoder().decode(decrypted));
   }
 
-  /**
-   * Decrypt multi-chunk data
-   * Each chunk is encrypted separately with: [IV][encrypted data][tag]
-   */
-  async decryptMultiChunk(encryptedData: ArrayBuffer, keyString: string): Promise<ArrayBuffer> {
-    const key = await this.importKey(keyString);
-    const dataView = new Uint8Array(encryptedData);
+}
 
-    // Encryption overhead: IV (12 bytes) + tag (16 bytes) = 28 bytes
-    const CHUNK_SIZE = 15 * 1024 * 1024; // 15MB
-    const ENCRYPTION_OVERHEAD = 12 + 16; // IV + tag
-    const ENCRYPTED_CHUNK_SIZE = CHUNK_SIZE + ENCRYPTION_OVERHEAD;
+class StreamByteReader {
+  private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
+  private readonly maxInputChunkSize: number;
+  private chunks: Uint8Array[] = [];
+  private chunkOffset = 0;
+  private bufferedBytes = 0;
+  private ended = false;
 
-    // If data is smaller than one encrypted chunk, decrypt as single chunk
-    if (dataView.byteLength <= ENCRYPTED_CHUNK_SIZE) {
-      return this.decryptChunk(encryptedData, key);
+  constructor(stream: ReadableStream<Uint8Array>, maxInputChunkSize: number) {
+    this.reader = stream.getReader();
+    this.maxInputChunkSize = maxInputChunkSize;
+  }
+
+  async readExactly(length: number): Promise<Uint8Array> {
+    while (this.bufferedBytes < length && !this.ended) {
+      const { done, value } = await this.reader.read();
+      if (done) {
+        this.ended = true;
+        break;
+      }
+      if (!(value instanceof Uint8Array)) {
+        throw new TypeError('Input stream must produce Uint8Array chunks');
+      }
+      if (value.byteLength === 0) {
+        throw new TypeError('Input stream must not produce empty chunks');
+      }
+      if (value.byteLength > this.maxInputChunkSize) {
+        throw new RangeError(`Input stream chunk exceeds ${this.maxInputChunkSize} bytes`);
+      }
+      this.chunks.push(value);
+      this.bufferedBytes += value.byteLength;
     }
 
-    // Multi-chunk file: decrypt each chunk separately
-    const decryptedChunks: ArrayBuffer[] = [];
-    let offset = 0;
-
-    while (offset < dataView.byteLength) {
-      const remainingBytes = dataView.byteLength - offset;
-      const currentEncryptedSize = Math.min(ENCRYPTED_CHUNK_SIZE, remainingBytes);
-
-      const encryptedChunk = dataView.slice(offset, offset + currentEncryptedSize).buffer;
-      const decryptedChunk = await this.decryptChunk(encryptedChunk, key);
-      decryptedChunks.push(decryptedChunk);
-
-      offset += currentEncryptedSize;
+    if (this.bufferedBytes < length) {
+      throw new Error(`Input stream ended early: expected ${length} bytes, received ${this.bufferedBytes}`);
     }
 
-    // Combine all decrypted chunks
-    const totalDecryptedSize = decryptedChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-    const combinedResult = new Uint8Array(totalDecryptedSize);
-    let writeOffset = 0;
-    for (const chunk of decryptedChunks) {
-      combinedResult.set(new Uint8Array(chunk), writeOffset);
-      writeOffset += chunk.byteLength;
+    const result = new Uint8Array(length);
+    let written = 0;
+    while (written < length) {
+      const chunk = this.chunks[0];
+      const available = chunk.byteLength - this.chunkOffset;
+      const count = Math.min(available, length - written);
+      result.set(chunk.subarray(this.chunkOffset, this.chunkOffset + count), written);
+      written += count;
+      this.chunkOffset += count;
+      this.bufferedBytes -= count;
+      if (this.chunkOffset === chunk.byteLength) {
+        this.chunks.shift();
+        this.chunkOffset = 0;
+      }
     }
+    return result;
+  }
 
-    return combinedResult.buffer;
+  async ensureEnd(): Promise<void> {
+    if (this.bufferedBytes > 0) {
+      throw new Error('Input stream contains trailing data');
+    }
+    while (!this.ended) {
+      const { done, value } = await this.reader.read();
+      if (done) {
+        this.ended = true;
+        return;
+      }
+      if (value && value.byteLength > 0) {
+        throw new Error('Input stream contains trailing data');
+      }
+    }
+  }
+
+  async cancel(reason?: unknown): Promise<void> {
+    await this.reader.cancel(reason);
   }
 }
 
@@ -244,6 +296,10 @@ export class EasyOneClient {
   private readonly MAX_FILE_SIZE = 100 * 1024 * 1024 * 1024; // 100GB
 
   constructor(config: EasyOneConfig) {
+    if (!globalThis.crypto?.subtle || typeof globalThis.fetch !== 'function' || typeof globalThis.ReadableStream !== 'function') {
+      throw new Error('EasyOneClient requires Web Crypto, fetch, and ReadableStream support');
+    }
+
     // Validate API key
     if (!config.apiKey || !config.apiKey.trim()) {
       throw new Error('API key cannot be empty');
@@ -270,16 +326,19 @@ export class EasyOneClient {
    * Upload a file with client-side encryption
    */
   async uploadFile(
-    file: File | Buffer | Blob,
+    file: UploadFile,
     options: UploadOptions = {}
   ): Promise<UploadResult> {
     const {
-      fileName = file instanceof File ? file.name : 'unnamed',
-      mimeType = file instanceof File ? file.type : (file instanceof Blob ? file.type : 'application/octet-stream'),
       retentionDays = 30,
       downloadLimit = null,
     } = options;
-    const isPrivate = options.private === true || options.isPrivate === true;
+    const isPrivate = options.private === true;
+    const { name: fileName, type: mimeType, size: fileSize } = file;
+
+    if (!fileName || !mimeType || !Number.isSafeInteger(fileSize) || fileSize < 0) {
+      throw new TypeError('UploadFile requires a name, type, and non-negative safe-integer size');
+    }
 
     // Client-side validation: Check file extension
     const forbiddenExtensions = ['.exe', '.bat', '.cmd', '.com', '.pif', '.scr', '.vbs', '.js'];
@@ -290,35 +349,23 @@ export class EasyOneClient {
       );
     }
 
-    // Generate encryption key
-    const encryptionKey = await this.encryption.generateKey();
-    const decryptionKey = await this.encryption.exportKey(encryptionKey);
-
-    // Read file data
-    let fileData: ArrayBuffer;
-    if (file instanceof File) {
-      fileData = await file.arrayBuffer();
-    } else if (file instanceof Blob) {
-      fileData = await file.arrayBuffer();
-    } else {
-      fileData = file.buffer.slice(
-        file.byteOffset,
-        file.byteOffset + file.byteLength
-      ) as ArrayBuffer;
-    }
-
-    const fileSize = fileData.byteLength;
-    const encryptedMetadata = await this.encryption.encryptMetadata(
-      { filename: fileName, mimeType, size: fileSize },
-      encryptionKey
-    );
-
     // Client-side validation: Check file size
     if (fileSize > this.MAX_FILE_SIZE) {
       throw new Error(
         `File too large: ${fileSize} bytes. Maximum size is ${this.MAX_FILE_SIZE} bytes`
       );
     }
+
+    const encryptionKey = await this.encryption.generateKey();
+    const decryptionKey = await this.encryption.exportKey(encryptionKey);
+    const encryptedMetadata = await this.encryption.encryptMetadata(
+      { filename: fileName, mimeType, size: fileSize },
+      encryptionKey
+    );
+    const reader = new StreamByteReader(
+      this.toReadableStream(file.data),
+      this.CHUNK_SIZE
+    );
 
     // Calculate chunks (ensure at least 1 chunk even for empty files)
     const totalChunks = Math.max(1, Math.ceil(fileSize / this.config.chunkSize));
@@ -329,12 +376,17 @@ export class EasyOneClient {
 
     // Upload chunks
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-      const start = chunkIndex * this.config.chunkSize;
-      const end = Math.min(start + this.config.chunkSize, fileSize);
-      const chunk = fileData.slice(start, end);
+      const remaining = fileSize - chunkIndex * this.config.chunkSize;
+      const chunk = await reader.readExactly(Math.min(this.config.chunkSize, Math.max(remaining, 0)));
+      if (chunkIndex === totalChunks - 1) {
+        await reader.ensureEnd();
+      }
 
       // Encrypt chunk
-      const encryptedChunk = await this.encryption.encryptChunk(chunk, encryptionKey);
+      const encryptedChunk = await this.encryption.encryptChunk(
+        copyToArrayBuffer(chunk),
+        encryptionKey
+      );
 
       // Upload chunk (server returns CID on first chunk)
       cid = await this.uploadChunk(cid, chunkIndex, totalChunks, encryptedChunk, {
@@ -347,11 +399,54 @@ export class EasyOneClient {
         encryptedMetadata,
       });
     }
+    if (!cid) {
+      throw new Error('Upload completed without a server-generated CID');
+    }
+    return { cid, decryptionKey };
+  }
 
-    return {
-      cid: cid!, // cid will be set after first chunk
-      decryptionKey,
-    };
+  private toReadableStream(data: UploadData): ReadableStream<Uint8Array> {
+    if (data instanceof Blob) {
+      return data.stream();
+    }
+    if (data instanceof Uint8Array) {
+      let offset = 0;
+      return new ReadableStream({
+        pull: controller => {
+          if (offset >= data.byteLength) {
+            controller.close();
+            return;
+          }
+          const end = Math.min(offset + this.CHUNK_SIZE, data.byteLength);
+          controller.enqueue(data.subarray(offset, end));
+          offset = end;
+        },
+      });
+    }
+    if (data instanceof ReadableStream) {
+      return data;
+    }
+    if (data && typeof data[Symbol.asyncIterator] === 'function') {
+      const iterator = data[Symbol.asyncIterator]();
+      return new ReadableStream({
+        async pull(controller) {
+          const { done, value } = await iterator.next();
+          if (done) {
+            controller.close();
+            return;
+          }
+          if (!(value instanceof Uint8Array)) {
+            controller.error(new TypeError('Upload iterable must produce Uint8Array chunks'));
+            return;
+          }
+          controller.enqueue(value);
+        },
+        async cancel(reason) {
+          await iterator.return?.(reason);
+        },
+      });
+    }
+    throw new TypeError('UploadFile data must be a Blob, Uint8Array, ReadableStream, or AsyncIterable');
   }
 
   /**
@@ -400,10 +495,13 @@ export class EasyOneClient {
       retentionDays: number;
       downloadLimit: number | null;
       isPrivate: boolean;
-      encryptedMetadata?: string;
+      encryptedMetadata: string;
     },
     maxRetries: number = 5
   ): Promise<string> {
+    if (!metadata.encryptedMetadata) {
+      throw new TypeError('encryptedMetadata is required');
+    }
     const url = `${this.config.baseUrl}/api/public/v1/upload`;
 
     const headers: Record<string, string> = {
@@ -429,9 +527,7 @@ export class EasyOneClient {
     if (metadata.downloadLimit !== null) {
       headers['x-download-limit'] = metadata.downloadLimit.toString();
     }
-    if (metadata.encryptedMetadata) {
-      headers['x-encrypted-metadata'] = metadata.encryptedMetadata;
-    }
+    headers['x-encrypted-metadata'] = metadata.encryptedMetadata;
     if (metadata.isPrivate) {
       headers['x-private'] = 'true';
     }
@@ -488,10 +584,12 @@ export class EasyOneClient {
       retentionDays?: number;
       downloadLimit?: number;
       private?: boolean;
-      isPrivate?: boolean;
-      encryptedMetadata?: string;
+      encryptedMetadata: string;
     }
   ): Promise<{ cid: string; success: boolean }> {
+    if (!metadata.encryptedMetadata) {
+      throw new TypeError('encryptedMetadata is required');
+    }
     const url = `${this.config.baseUrl}/api/public/v1/complete-upload`;
 
     const response = await fetch(url, {
@@ -514,52 +612,90 @@ export class EasyOneClient {
     return response.json();
   }
 
-  /**
-   * Download and decrypt a file
-   */
+  /** Download and decrypt a file without buffering the full payload. */
   async downloadFile(
     cid: string,
-    decryptionKey: string,
-    outputPath?: string
-  ): Promise<Blob> {
-    // Get download URL
+    decryptionKey: string
+  ): Promise<DownloadFileResult> {
     const downloadInfo = await this.getDownloadInfo(cid);
-    let fileInfo = {
-      filename: downloadInfo.filename || 'downloaded_file',
-      mimeType: downloadInfo.mimeType || 'application/octet-stream',
-      size: downloadInfo.size,
-    };
-
-    if (downloadInfo.encryptedMetadata) {
-      fileInfo = await this.encryption.decryptMetadata(downloadInfo.encryptedMetadata, decryptionKey);
+    if (!downloadInfo.encryptedMetadata) {
+      throw new Error('Download is missing encrypted metadata');
+    }
+    const fileInfo = await this.encryption.decryptMetadata(
+      downloadInfo.encryptedMetadata,
+      decryptionKey
+    );
+    if (
+      !fileInfo ||
+      typeof fileInfo.filename !== 'string' ||
+      !fileInfo.filename ||
+      typeof fileInfo.mimeType !== 'string' ||
+      !fileInfo.mimeType ||
+      !Number.isSafeInteger(fileInfo.size) ||
+      fileInfo.size < 0 ||
+      fileInfo.size > this.MAX_FILE_SIZE
+    ) {
+      throw new Error('Download metadata does not contain a valid filename, MIME type, and size');
     }
 
-    // Download file
     const response = await fetch(downloadInfo.downloadUrl);
     if (!response.ok) {
       throw new Error(`Download failed: ${response.statusText}`);
     }
-
-    const encryptedData = await response.arrayBuffer();
-
-    // Decrypt data (handles both single and multi-chunk files)
-    const decryptedData = await this.encryption.decryptMultiChunk(encryptedData, decryptionKey);
-
-    const blob = new Blob([decryptedData], { type: fileInfo.mimeType });
-
-    // Save to file if outputPath provided (Node.js environment)
-    if (outputPath && typeof require !== 'undefined') {
-      const fs = require('fs');
-      fs.writeFileSync(outputPath, Buffer.from(decryptedData));
+    if (!response.body) {
+      throw new Error('Download response does not contain a readable body');
     }
 
-    return blob;
+    const key = await this.encryption.importKey(decryptionKey);
+    const encryptedReader = new StreamByteReader(
+      response.body,
+      this.CHUNK_SIZE + 28
+    );
+    const totalChunks = Math.max(1, Math.ceil(fileInfo.size / this.CHUNK_SIZE));
+    let chunkIndex = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull: async controller => {
+        try {
+          if (chunkIndex >= totalChunks) {
+            await encryptedReader.ensureEnd();
+            controller.close();
+            return;
+          }
+
+          const remaining = fileInfo.size - chunkIndex * this.CHUNK_SIZE;
+          const plaintextLength = Math.min(this.CHUNK_SIZE, Math.max(remaining, 0));
+          const encryptedChunk = await encryptedReader.readExactly(plaintextLength + 28);
+          const decrypted = await this.encryption.decryptChunk(
+            copyToArrayBuffer(encryptedChunk),
+            key
+          );
+          if (decrypted.byteLength !== plaintextLength) {
+            throw new Error(`Decrypted chunk ${chunkIndex} has an invalid size`);
+          }
+
+          chunkIndex += 1;
+          if (decrypted.byteLength > 0) {
+            controller.enqueue(new Uint8Array(decrypted));
+          }
+          if (chunkIndex >= totalChunks) {
+            await encryptedReader.ensureEnd();
+            controller.close();
+          }
+        } catch (error) {
+          controller.error(error);
+          await encryptedReader.cancel(error).catch(() => undefined);
+        }
+      },
+      cancel: reason => encryptedReader.cancel(reason),
+    });
+
+    return { ...fileInfo, stream };
   }
 
   /**
    * Get download information for a file
    */
-  async getDownloadInfo(cid: string): Promise<DownloadResult> {
+  async getDownloadInfo(cid: string): Promise<DownloadInfo> {
     const url = `${this.config.baseUrl}/api/public/v1/files/${cid}/download`;
 
     const response = await fetch(url, {
@@ -638,16 +774,10 @@ export class EasyOneClient {
    * Decrypt data
    */
   async decryptData(encryptedData: ArrayBuffer, key: string): Promise<ArrayBuffer> {
-    return this.encryption.decryptMultiChunk(encryptedData, key);
+    const importedKey = await this.encryption.importKey(key);
+    return this.encryption.decryptChunk(encryptedData, importedKey);
   }
 }
 
 // Export for Node.js environment
 export default EasyOneClient;
-
-// Node.js compatibility layer
-if (typeof require !== 'undefined' && typeof window === 'undefined') {
-  const { webcrypto } = require('crypto');
-  // @ts-ignore - polyfill Web Crypto API
-  global.crypto = webcrypto;
-}

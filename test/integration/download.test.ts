@@ -14,6 +14,13 @@ if (typeof globalThis.crypto === 'undefined') {
   globalThis.crypto = webcrypto;
 }
 
+const asUpload = (blob: Blob, name: string, type = blob.type || 'application/octet-stream') => ({
+  data: blob,
+  name,
+  type,
+  size: blob.size,
+});
+
 // Store uploaded file info for download tests
 const uploadedFiles: Array<{ cid: string; decryptionKey: string; originalContent: Uint8Array }> = [];
 
@@ -33,9 +40,7 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data], { type: 'text/plain' });
 
-    const result = await client.uploadFile(blob, {
-      fileName: 'download_test.txt',
-      mimeType: 'text/plain',
+    const result = await client.uploadFile(asUpload(blob, 'download_test.txt'), {
       retentionDays: 7,
     });
 
@@ -80,8 +85,8 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
       return;
     }
 
-    const blob = await client.downloadFile(fileInfo.cid, fileInfo.decryptionKey);
-    const downloadedText = await blob.text();
+    const download = await client.downloadFile(fileInfo.cid, fileInfo.decryptionKey);
+    const downloadedText = await new Response(download.stream).text();
     assert.strictEqual(downloadedText, new TextDecoder().decode(fileInfo.originalContent));
   });
 
@@ -91,9 +96,7 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
     const blob = new Blob([data], { type: 'application/octet-stream' });
 
     // Upload
-    const uploadResult = await client.uploadFile(blob, {
-      fileName: 'roundtrip_test.dat',
-      mimeType: 'application/octet-stream',
+    const uploadResult = await client.uploadFile(asUpload(blob, 'roundtrip_test.dat'), {
       retentionDays: 7,
     });
 
@@ -116,9 +119,7 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
     const blob = new Blob([originalData], { type: 'application/octet-stream' });
 
     // Upload
-    const uploadResult = await client.uploadFile(blob, {
-      fileName: 'binary_download_test.bin',
-      mimeType: 'application/octet-stream',
+    const uploadResult = await client.uploadFile(asUpload(blob, 'binary_download_test.bin'), {
       retentionDays: 1,
     });
 
@@ -163,9 +164,7 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
     const blob = new Blob([originalData], { type: 'application/octet-stream' });
 
     // Upload
-    const uploadResult = await client.uploadFile(blob, {
-      fileName: 'large_download_test.bin',
-      mimeType: 'application/octet-stream',
+    const uploadResult = await client.uploadFile(asUpload(blob, 'large_download_test.bin'), {
       retentionDays: 1,
     });
 
@@ -207,9 +206,7 @@ describe('integration: download flow', { skip: shouldSkipIntegration() }, () => 
     const data = new TextEncoder().encode(testContent);
     const blob = new Blob([data], { type: 'application/json' });
 
-    const uploadResult = await client.uploadFile(blob, {
-      fileName: 'filetype_test.json',
-      mimeType: 'application/json',
+    const uploadResult = await client.uploadFile(asUpload(blob, 'filetype_test.json'), {
       retentionDays: 1,
     });
 
