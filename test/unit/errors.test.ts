@@ -39,6 +39,7 @@ describe('unit: error handling', () => {
             retentionDays: 30,
             downloadLimit: null,
             isPrivate: false,
+            embeddingDisabled: true,
             encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
           }
         );
@@ -336,6 +337,7 @@ describe('unit: error handling', () => {
         retentionDays: 30,
         downloadLimit: null,
         isPrivate: false,
+        embeddingDisabled: true,
         encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       }
     );

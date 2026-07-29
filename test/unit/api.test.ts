@@ -42,6 +42,7 @@ describe('unit: API calls', () => {
         retentionDays: 30,
         downloadLimit: null,
         isPrivate: false,
+        embeddingDisabled: true,
         encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       }
     );
@@ -59,6 +60,7 @@ describe('unit: API calls', () => {
         retentionDays: 30,
         downloadLimit: null,
         isPrivate: false,
+        embeddingDisabled: true,
         encryptedMetadata: '',
       }),
       /encryptedMetadata is required/
@@ -85,6 +87,7 @@ describe('unit: API calls', () => {
         retentionDays: 30,
         downloadLimit: 10,
         isPrivate: false,
+        embeddingDisabled: true,
         encryptedMetadata: 'AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       }
     );
@@ -124,6 +127,7 @@ describe('unit: API calls', () => {
     assert.strictEqual(headers['x-file-size'], '3');
     assert.strictEqual(headers['x-mime-type'], 'application/octet-stream');
     assert.ok(headers['x-encrypted-metadata']);
+    assert.strictEqual(headers['x-embedding-disabled'], 'true');
     assert.strictEqual((uploadRequest!.body as Uint8Array).byteLength, 3 + 28);
   });
 
@@ -147,6 +151,42 @@ describe('unit: API calls', () => {
 
     const headers = uploadRequest!.headers as Record<string, string>;
     assert.strictEqual(headers['x-private'], 'true');
+    assert.strictEqual(headers['x-embedding-disabled'], 'true');
+  });
+
+  it('should enable embedding only when explicitly requested', async (t) => {
+    let uploadRequest: RequestInit | undefined;
+    t.mock.method(globalThis, 'fetch', async (_url, init) => {
+      uploadRequest = init as RequestInit;
+      return Response.json({ cid: 'server-generated-cid' });
+    });
+
+    await client.uploadFile({
+      data: new Uint8Array([1]),
+      name: 'embeddable.bin',
+      type: 'application/octet-stream',
+      size: 1,
+    }, { embed: true });
+
+    const headers = uploadRequest!.headers as Record<string, string>;
+    assert.strictEqual(headers['x-embedding-disabled'], 'false');
+  });
+
+  it('should reject embedding with private access or a download limit', async () => {
+    const file = {
+      data: new Uint8Array([1]),
+      name: 'conflict.bin',
+      type: 'application/octet-stream',
+      size: 1,
+    };
+    await assert.rejects(
+      client.uploadFile(file, { embed: true, private: true }),
+      /embed cannot be enabled/
+    );
+    await assert.rejects(
+      client.uploadFile(file, { embed: true, downloadLimit: 1 }),
+      /embed cannot be enabled/
+    );
   });
 
   it('should stream arbitrary source chunks into protocol-sized chunks', async (t) => {

@@ -32,6 +32,7 @@ export interface UploadOptions {
   retentionDays?: number;
   downloadLimit?: number;
   private?: boolean;
+  embed?: boolean;
 }
 
 export interface FileMetadata {
@@ -332,8 +333,22 @@ export class EasyOneClient {
     const {
       retentionDays = 30,
       downloadLimit = null,
+      embed = false,
     } = options;
+    if (options.private !== undefined && typeof options.private !== 'boolean') {
+      throw new TypeError('private must be a boolean');
+    }
     const isPrivate = options.private === true;
+    if (typeof embed !== 'boolean') {
+      throw new TypeError('embed must be a boolean');
+    }
+    if (downloadLimit !== null && (!Number.isSafeInteger(downloadLimit) || downloadLimit < 1)) {
+      throw new TypeError('downloadLimit must be a positive safe integer');
+    }
+    if (embed && (isPrivate || downloadLimit !== null)) {
+      throw new Error('embed cannot be enabled for private uploads or uploads with a download limit');
+    }
+    const embeddingDisabled = !embed || isPrivate || downloadLimit !== null;
     const { name: fileName, type: mimeType, size: fileSize } = file;
 
     if (!fileName || !mimeType || !Number.isSafeInteger(fileSize) || fileSize < 0) {
@@ -396,6 +411,7 @@ export class EasyOneClient {
         retentionDays,
         downloadLimit,
         isPrivate,
+        embeddingDisabled,
         encryptedMetadata,
       });
     }
@@ -495,6 +511,7 @@ export class EasyOneClient {
       retentionDays: number;
       downloadLimit: number | null;
       isPrivate: boolean;
+      embeddingDisabled: boolean;
       encryptedMetadata: string;
     },
     maxRetries: number = 5
@@ -512,6 +529,7 @@ export class EasyOneClient {
       'x-file-size': metadata.fileSize.toString(),
       'x-mime-type': 'application/octet-stream',
       'x-retention-days': metadata.retentionDays.toString(),
+      'x-embedding-disabled': metadata.embeddingDisabled ? 'true' : 'false',
     };
 
     // SECURITY: Only send x-cid header for subsequent chunks
